@@ -23,6 +23,9 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = getenv("BOT_TOKEN")
+
+if BOT_TOKEN is None:
+    raise ValueError("BOT_TOKEN is not set in environment variables")
 DB_PATH = "rusbot.db"
 
 # ============================================================
