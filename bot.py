@@ -3,7 +3,7 @@ import logging
 import random
 from os import getenv
 from datetime import date
-
+import os
 import aiosqlite
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import (
@@ -19,10 +19,12 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from dotenv import load_dotenv
 
-load_dotenv()
+
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = getenv("BOT_TOKEN")
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+
+bot = Bot(token=BOT_TOKEN)
 
 if BOT_TOKEN is None:
     raise ValueError("BOT_TOKEN is not set in environment variables")
