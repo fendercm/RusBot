@@ -578,30 +578,34 @@ async def send_placement_q(msg, state, edit=False):
     lang = data.get("lang", "en")
 
     if qi >= len(PLACEMENT_TEST):
-        await finish_placement(msg, state, lang)
+        score = data.get("score", 0)
+        await finish_placement(msg, state, lang, score=score, edit=edit)
         return
 
     q = PLACEMENT_TEST[qi]
-    text = f"📝 *Question {qi+1}/{len(PLACEMENT_TEST)}*\n\n_{q['q']}_"
+    text = f"📝 <b>Question {qi+1}/{len(PLACEMENT_TEST)}</b>\n\n<i>{q['q']}</i>"
     kb = kb_options(q["opts"])
 
-    if edit:
-        await msg.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-    else:
-        await msg.answer(text, reply_markup=kb, parse_mode="Markdown")
-
+    try:
+        if edit:
+            await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        logging.error(f"send_placement_q error: {e}")
+        await msg.answer(text, reply_markup=kb, parse_mode="HTML")
 # ---------- Ответ на placement ----------
 @router.callback_query(Reg.placement, F.data.startswith("qa_"))
 async def cb_placement_answer(cb: CallbackQuery, state: FSMContext):
+    # Пропускаем "qa_next" — он обрабатывается отдельно
+    if cb.data == "qa_next":
+        await cb.answer()
+        return
+
     data = await state.get_data()
     qi = data.get("qi", 0)
     score = data.get("score", 0)
     lang = data.get("lang", "en")
-
-    # игнорируем "qa_next" здесь — обрабатывается ниже
-    if cb.data == "qa_next":
-        await cb.answer()
-        return
 
     if qi >= len(PLACEMENT_TEST):
         await cb.answer()
@@ -615,10 +619,11 @@ async def cb_placement_answer(cb: CallbackQuery, state: FSMContext):
 
     exp = q["exp"].get(lang, q["exp"]["en"])
     ans_text = q["opts"][q["ans"]]
+
     if correct:
-        result = f"✅ *Correct!*\n\n💡 {exp}"
+        result = f"✅ <b>Correct!</b>\n\n💡 {exp}"
     else:
-        result = f"❌ *Wrong!* Correct: *{ans_text}*\n\n💡 {exp}"
+        result = f"❌ <b>Wrong!</b> Correct: <b>{ans_text}</b>\n\n💡 {exp}"
 
     new_qi = qi + 1
     is_last = new_qi >= len(PLACEMENT_TEST)
@@ -627,7 +632,7 @@ async def cb_placement_answer(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_text(
         result,
         reply_markup=kb_next(lang, is_last),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
     await cb.answer()
 
@@ -637,16 +642,18 @@ async def cb_placement_next(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     qi = data.get("qi", 0)
     lang = data.get("lang", "en")
+    score = data.get("score", 0)
 
     if qi >= len(PLACEMENT_TEST):
-        await finish_placement(cb.message, state, lang, edit=True)
+        await finish_placement(cb.message, state, lang, score=score, edit=True)
     else:
         await send_placement_q(cb.message, state, edit=True)
     await cb.answer()
-
-async def finish_placement(msg, state, lang, edit=False):
+async def finish_placement(msg, state, lang, score=None, edit=False):
     data = await state.get_data()
-    score = data.get("score", 0)
+    if score is None:
+        score = data.get("score", 0)
+
     uid = msg.chat.id
     level = level_from_score(score, len(PLACEMENT_TEST))
 
@@ -655,19 +662,22 @@ async def finish_placement(msg, state, lang, edit=False):
     await state.clear()
 
     text = (
-        f"🎉 *Placement Test Complete!*\n\n"
+        f"🎉 <b>Placement Test Complete!</b>\n\n"
         f"📊 Score: {score}/{len(PLACEMENT_TEST)}\n"
-        f"🏆 Your level: *{level}*\n\n"
+        f"🏆 Your level: <b>{level}</b>\n\n"
         f"Welcome to RusBot! 🚀"
     )
+
     if edit:
-        await msg.edit_text(text, parse_mode="Markdown")
+        try:
+            await msg.edit_text(text, parse_mode="HTML")
+        except Exception:
+            pass
 
     await msg.answer(
         tx(lang, "menu"),
         reply_markup=kb_main(lang)
     )
-
 # ============================================================
 # MAIN MENU HANDLERS
 # ============================================================
@@ -949,15 +959,14 @@ async def show_leaderboard(msg: Message, user):
 # ============================================================
 
 async def main():
+    await bot.delete_webhook(drop_pending_updates=True)
     await init_db()
-    bot = Bot(
-        token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
-    )
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     logging.info("🤖 RusBot started!")
     await dp.start_polling(bot)
 
+if __name__ == "__main__":
+    asyncio.run(main())
 if __name__ == "__main__":
     asyncio.run(main())
