@@ -739,29 +739,99 @@ async def start_quiz(msg: Message, state: FSMContext, user):
         lang=lang,
         level=level
     )
+
     await msg.answer(
-        f"📝 *Daily Quiz — Level {level}*\n5 questions | Let's go! 🚀",
-        parse_mode="Markdown"
+        f"📝 <b>Daily Quiz — Level {level}</b>\n"
+        f"5 questions | Let's go! 🚀",
+        parse_mode="HTML"
     )
+
     await send_quiz_q(msg, questions[0], 0, len(questions), lang)
 
-async def send_quiz_q(msg, q, qi, total, lang):
-    text = f"❓ *Question {qi+1}/{total}*\n\n{q['q']}"
-    await msg.answer(text, reply_markup=kb_options(q["opts"]), parse_mode="Markdown")
 
-# ---------- Ответ Quiz ----------
-@router.callback_query(Quiz.active, F.data.startswith("qa_"))
-async def cb_quiz_answer(cb: CallbackQuery, state: FSMContext):
+async def send_quiz_q(msg, q, qi, total, lang):
+    text = f"❓ <b>Question {qi+1}/{total}</b>\n\n{q['q']}"
+    await msg.answer(
+        text,
+        reply_markup=kb_options(q["opts"]),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("qa_"), Quiz.active)
+async def cb_quiz_handler(cb: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    questions = data.get("questions", [])
+    qi = data.get("qi", 0)
+    correct_count = data.get("correct", 0)
+    lang = data.get("lang", "en")
+    level = data.get("level", "A1")
+
+    # ---- Нажата кнопка NEXT ----
     if cb.data == "qa_next":
+        if qi >= len(questions):
+            # Финиш квиза
+            total_xp = correct_count * 15
+            uid = cb.from_user.id
+
+            await add_xp(uid, total_xp)
+            await save_quiz_result(uid, level, correct_count, len(questions))
+            await update_streak(uid)
+            await state.clear()
+
+            pct = int(correct_count / len(questions) * 100)
+
+            if pct == 100:
+                emoji = "🏆"
+                comment = "Perfect score! Excellent!"
+            elif pct >= 70:
+                emoji = "👍"
+                comment = "Great job! Keep it up!"
+            else:
+                emoji = "💪"
+                comment = "Keep practicing!"
+
+            text = (
+                f"🎊 <b>Quiz Complete!</b>\n\n"
+                f"✅ Correct: {correct_count}/{len(questions)}\n"
+                f"📊 Accuracy: {pct}%\n"
+                f"⭐ XP earned: +{total_xp}\n\n"
+                f"{emoji} {comment}"
+            )
+
+            try:
+                await cb.message.edit_text(text, parse_mode="HTML")
+            except Exception:
+                pass
+
+            user = await get_user(uid)
+            await cb.message.answer(
+                tx(lang, "menu"),
+                reply_markup=kb_main(lang)
+            )
+
+        else:
+            # Следующий вопрос
+            q = questions[qi]
+            text = f"❓ <b>Question {qi+1}/{len(questions)}</b>\n\n{q['q']}"
+
+            try:
+                await cb.message.edit_text(
+                    text,
+                    reply_markup=kb_options(q["opts"]),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                await cb.message.answer(
+                    text,
+                    reply_markup=kb_options(q["opts"]),
+                    parse_mode="HTML"
+                )
+
         await cb.answer()
         return
 
-    data = await state.get_data()
-    questions = data["questions"]
-    qi = data["qi"]
-    correct_count = data["correct"]
-    lang = data["lang"]
-
+    # ---- Нажата кнопка ответа (qa_0, qa_1, qa_2, qa_3) ----
     if qi >= len(questions):
         await cb.answer()
         return
@@ -779,58 +849,15 @@ async def cb_quiz_answer(cb: CallbackQuery, state: FSMContext):
 
     new_qi = qi + 1
     is_last = new_qi >= len(questions)
+
+    # Сохраняем новый qi и score
     await state.update_data(qi=new_qi, correct=correct_count)
 
     await cb.message.edit_text(
         result,
         reply_markup=kb_next(lang, is_last),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
-    await cb.answer()
-
-# ---------- Следующий вопрос Quiz ----------
-@router.callback_query(Quiz.active, F.data == "qa_next")
-async def cb_quiz_next(cb: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    questions = data["questions"]
-    qi = data["qi"]
-    correct_count = data["correct"]
-    lang = data["lang"]
-    level = data["level"]
-
-    if qi >= len(questions):
-        # Финиш
-        total_xp = correct_count * 15
-        await add_xp(cb.from_user.id, total_xp)
-        await save_quiz_result(cb.from_user.id, level, correct_count, len(questions))
-        await update_streak(cb.from_user.id)
-        await state.clear()
-
-        pct = int(correct_count / len(questions) * 100)
-        emoji = "🏆" if pct == 100 else "👍" if pct >= 70 else "💪"
-
-        text = (
-            f"🎊 *Quiz Complete!*\n\n"
-            f"✅ Correct: {correct_count}/{len(questions)}\n"
-            f"📊 Accuracy: {pct}%\n"
-            f"⭐ XP earned: +{total_xp}\n\n"
-            f"{emoji} {'Perfect score!' if pct==100 else 'Great job!' if pct>=70 else 'Keep practicing!'}"
-        )
-        await cb.message.edit_text(text, parse_mode="Markdown")
-
-        user = await get_user(cb.from_user.id)
-        await cb.message.answer(
-            tx(lang, "menu"),
-            reply_markup=kb_main(lang)
-        )
-    else:
-        q = questions[qi]
-        await send_quiz_q(cb.message, q, qi, len(questions), lang)
-        try:
-            await cb.message.delete()
-        except Exception:
-            pass
-
     await cb.answer()
 
 # ---------- Grammar callbacks ----------
