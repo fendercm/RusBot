@@ -567,23 +567,25 @@ async def cb_set_lang_reg(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 # ---------- Старт теста ----------
-@router.callback_query(Reg.placement, F.data == "placement_start")
+@router.callback_query(F.data == "placement_start")
 async def cb_placement_start(cb: CallbackQuery, state: FSMContext):
-    await send_placement_q(cb.message, state, edit=True)
+    await state.set_state(Reg.placement)
+    await state.update_data(qi=0, score=0)
+    data = await state.get_data()
+    lang = data.get("lang", "en")
+    await send_placement_q(cb.message, lang, 0, edit=True)
     await cb.answer()
 
-async def send_placement_q(msg, state, edit=False):
-    data = await state.get_data()
-    qi = data.get("qi", 0)
-    lang = data.get("lang", "en")
 
+async def send_placement_q(msg, lang, qi, edit=False):
     if qi >= len(PLACEMENT_TEST):
-        score = data.get("score", 0)
-        await finish_placement(msg, state, lang, score=score, edit=edit)
         return
 
     q = PLACEMENT_TEST[qi]
-    text = f"📝 <b>Question {qi+1}/{len(PLACEMENT_TEST)}</b>\n\n<i>{q['q']}</i>"
+    text = (
+        f"📝 <b>Question {qi+1}/{len(PLACEMENT_TEST)}</b>\n\n"
+        f"<i>{q['q']}</i>"
+    )
     kb = kb_options(q["opts"])
 
     try:
@@ -594,39 +596,70 @@ async def send_placement_q(msg, state, edit=False):
     except Exception as e:
         logging.error(f"send_placement_q error: {e}")
         await msg.answer(text, reply_markup=kb, parse_mode="HTML")
-# ---------- Ответ на placement ----------
-@router.callback_query(Reg.placement, F.data.startswith("qa_"))
-async def cb_placement_answer(cb: CallbackQuery, state: FSMContext):
-    # Пропускаем "qa_next" — он обрабатывается отдельно
-    if cb.data == "qa_next":
-        await cb.answer()
-        return
 
+
+@router.callback_query(F.data.startswith("qa_"), Reg.placement)
+async def cb_placement_handler(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     qi = data.get("qi", 0)
     score = data.get("score", 0)
     lang = data.get("lang", "en")
 
+    # ---- Нажата кнопка NEXT ----
+    if cb.data == "qa_next":
+        if qi >= len(PLACEMENT_TEST):
+            # Тест завершён
+            level = level_from_score(score, len(PLACEMENT_TEST))
+            uid = cb.from_user.id
+            await update_user(uid, level=level, placement_done=1)
+            await update_streak(uid)
+            await state.clear()
+
+            text = (
+                f"🎉 <b>Placement Test Complete!</b>\n\n"
+                f"📊 Score: {score}/{len(PLACEMENT_TEST)}\n"
+                f"🏆 Your level: <b>{level}</b>\n\n"
+                f"Welcome to RusBot! 🚀"
+            )
+            try:
+                await cb.message.edit_text(text, parse_mode="HTML")
+            except Exception:
+                pass
+            await cb.message.answer(
+                tx(lang, "menu"),
+                reply_markup=kb_main(lang)
+            )
+        else:
+            # Следующий вопрос
+            await send_placement_q(cb.message, lang, qi, edit=True)
+
+        await cb.answer()
+        return
+
+    # ---- Нажата кнопка ответа (qa_0, qa_1, qa_2, qa_3) ----
     if qi >= len(PLACEMENT_TEST):
         await cb.answer()
         return
 
     chosen = int(cb.data.split("_")[1])
     q = PLACEMENT_TEST[qi]
-    correct = chosen == q["ans"]
-    if correct:
+    is_correct = chosen == q["ans"]
+
+    if is_correct:
         score += 1
 
     exp = q["exp"].get(lang, q["exp"]["en"])
     ans_text = q["opts"][q["ans"]]
 
-    if correct:
+    if is_correct:
         result = f"✅ <b>Correct!</b>\n\n💡 {exp}"
     else:
         result = f"❌ <b>Wrong!</b> Correct: <b>{ans_text}</b>\n\n💡 {exp}"
 
     new_qi = qi + 1
     is_last = new_qi >= len(PLACEMENT_TEST)
+
+    # Сохраняем новый qi и score
     await state.update_data(qi=new_qi, score=score)
 
     await cb.message.edit_text(
@@ -636,48 +669,6 @@ async def cb_placement_answer(cb: CallbackQuery, state: FSMContext):
     )
     await cb.answer()
 
-# ---------- Следующий вопрос placement ----------
-@router.callback_query(Reg.placement, F.data == "qa_next")
-async def cb_placement_next(cb: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    qi = data.get("qi", 0)
-    lang = data.get("lang", "en")
-    score = data.get("score", 0)
-
-    if qi >= len(PLACEMENT_TEST):
-        await finish_placement(cb.message, state, lang, score=score, edit=True)
-    else:
-        await send_placement_q(cb.message, state, edit=True)
-    await cb.answer()
-async def finish_placement(msg, state, lang, score=None, edit=False):
-    data = await state.get_data()
-    if score is None:
-        score = data.get("score", 0)
-
-    uid = msg.chat.id
-    level = level_from_score(score, len(PLACEMENT_TEST))
-
-    await update_user(uid, level=level, placement_done=1)
-    await update_streak(uid)
-    await state.clear()
-
-    text = (
-        f"🎉 <b>Placement Test Complete!</b>\n\n"
-        f"📊 Score: {score}/{len(PLACEMENT_TEST)}\n"
-        f"🏆 Your level: <b>{level}</b>\n\n"
-        f"Welcome to RusBot! 🚀"
-    )
-
-    if edit:
-        try:
-            await msg.edit_text(text, parse_mode="HTML")
-        except Exception:
-            pass
-
-    await msg.answer(
-        tx(lang, "menu"),
-        reply_markup=kb_main(lang)
-    )
 # ============================================================
 # MAIN MENU HANDLERS
 # ============================================================
